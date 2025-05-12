@@ -1,94 +1,72 @@
-import os
-import json
-import datetime
+import os, json, datetime
 from dotenv import load_dotenv
-from telegram import Bot, ReplyKeyboardMarkup, Update
-from telegram.ext import (
-    Updater,
-    CommandHandler,
-    MessageHandler,
-    Filters,
-    CallbackContext,
-)
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
 
-# 1) Завантажуємо .env
 load_dotenv()
-TOKEN             = os.getenv("TELEGRAM_TOKEN")
-SMM_CHAT_IDS      = [int(x) for x in os.getenv("SMM_CHAT_IDS","").split(",") if x.strip()]
-STORAGE_CHAT_ID   = int(os.getenv("STORAGE_CHAT_ID","0"))
-PINNED_MESSAGE_ID = int(os.getenv("PINNED_MESSAGE_ID","0"))
-
-if not all([TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID, PINNED_MESSAGE_ID]):
-    raise RuntimeError(
-        "Вкажіть у середовищі всі змінні: TELEGRAM_TOKEN, SMM_CHAT_IDS, "
-        "STORAGE_CHAT_ID, PINNED_MESSAGE_ID"
-    )
+TOKEN           = os.getenv("TELEGRAM_TOKEN")
+SMM_CHAT_IDS    = [int(x) for x in os.getenv("SMM_CHAT_IDS","").split(",") if x]
+STORAGE_CHAT_ID = int(os.getenv("STORAGE_CHAT_ID","0"))
+DB_FILE         = "data.json"
 
 bot = Bot(token=TOKEN)
-updater = Updater(bot=bot, use_context=True)
-dp = updater.dispatcher
+dp  = Dispatcher(bot)
+user_state = {}
 
-# Зберігаємо вибір категорії
-user_state: dict[int,str] = {}
+def load_db():
+    if os.path.exists(DB_FILE):
+        return json.load(open(DB_FILE, encoding="utf-8"))
+    return {}
 
-def load_db() -> dict:
-    msg = bot.get_chat(STORAGE_CHAT_ID).pinned_message
-    try:
-        return json.loads(msg.text or "{}")
-    except:
-        return {}
+def save_db(db):
+    json.dump(db, open(DB_FILE,"w",encoding="utf-8"),
+              ensure_ascii=False, indent=2)
 
-def save_db(db: dict):
-    text = json.dumps(db, ensure_ascii=False, indent=2)
-    bot.edit_message_text(
-        chat_id=STORAGE_CHAT_ID,
-        message_id=PINNED_MESSAGE_ID,
-        text=text
-    )
+@dp.message_handler(commands=["start"])
+async def cmd_start(m: types.Message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("Весільний контент","Корпоративний контент")
+    await m.answer("Що за котик завітав? Що сьогодні назнімав?", reply_markup=kb)
 
-def start(update: Update, ctx: CallbackContext):
-    kb = ReplyKeyboardMarkup(
-        [["Контент з весілля, гендерпатія, освідчення"],
-         ["Корпоративи, дні народження, конференції"]],
-        resize_keyboard=True
-    )
-    update.message.reply_text(
-        "Що за котик завітав? Що сьогодні назнімав?", reply_markup=kb
-    )
+@dp.message_handler(commands=["stats"])
+async def cmd_stats(m: types.Message):
+    db = load_db()
+    uid = str(m.from_user.id)
+    if uid in db:
+        e = db[uid]
+        text = f"📊 {e['name']}, ви надіслали {e['count']} лінків\n\n🏆 Топ-5:\n"
+        top = sorted(db.values(), key=lambda x: x["count"], reverse=True)[:5]
+        for i,u in enumerate(top,1):
+            text += f"{i}. {u['name']} – {u['count']}\n"
+    else:
+        text = "Ви ще нічого не надсилали."
+    await m.answer(text)
 
-def choose_category(update: Update, ctx: CallbackContext):
-    user_state[update.effective_user.id] = update.message.text
-    update.message.reply_text("Надішліть, будь ласка, посилання на сторіс.")
+@dp.message_handler(lambda m: m.text in ["Весільний контент","Корпоративний контент"])
+async def choose(m: types.Message):
+    user_state[m.from_user.id] = m.text
+    await m.answer("Надішліть, будь ласка, лінк (http…)")
 
-def receive_link(update: Update, ctx: CallbackContext):
-    link = update.message.text
-    uid  = str(update.effective_user.id)
-    db   = load_db()
-
-    entry = db.get(uid, {"name": update.effective_user.full_name, "count":0, "subs":[]})
-    entry["count"] += 1
-    entry["subs"].append({
-        "category": user_state.get(update.effective_user.id, ""),
-        "link":     link,
-        "time":     datetime.datetime.utcnow().isoformat()
-    })
-    db[uid] = entry
+@dp.message_handler(lambda m: m.text and m.text.startswith("http"))
+async def receive(m: types.Message):
+    db = load_db()
+    uid = str(m.from_user.id)
+    e = db.get(uid, {"name":m.from_user.full_name,"count":0})
+    e["count"] += 1
+    db[uid] = e
     save_db(db)
 
-    update.message.reply_text(f"Контент отримано! Твій лічильник чемпіона: {entry['count']}")
-    alert = (
-        f"🆕 Новий контент від {entry['name']}\n"
-        f"Категорія: {user_state.get(update.effective_user.id)}\n"
-        f"Лінк: {link}"
+    # публікація в Storage-канал
+    await bot.send_message(
+        chat_id=STORAGE_CHAT_ID,
+        text=f"#{e['count']} | {e['name']} | {m.text}"
     )
+    # відповідь користувачу
+    await m.answer("Дуже крутий контент, я тебе обожнюю! Чекаю наступного.")
+    # сповіщення SMM
+    note = f"🆕 {e['name']} (#{e['count']})\n{m.text}"
     for cid in SMM_CHAT_IDS:
-        bot.send_message(chat_id=cid, text=alert)
+        await bot.send_message(cid, note)
 
-# Регіструємо хендлери
-dp.add_handler(CommandHandler("start", start))
-dp.add_handler(MessageHandler(Filters.regex(r"^(Контент з весілля, гендерпатія, освідчення|Корпоративи, дні народження, конференції)$"), choose_category))
-dp.add_handler(MessageHandler(Filters.regex(r"^https?://"), receive_link))
-
-if __name__ == "__main__":
-    updater.start_polling(drop_pending_updates=True)
-    updater.idle()
+if __name__=="__main__":
+    executor.start_polling(dp, skip_updates=True)
