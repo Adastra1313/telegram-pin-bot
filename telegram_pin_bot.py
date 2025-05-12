@@ -1,38 +1,30 @@
 import os
 import json
 import datetime
-from aiogram import Bot, Dispatcher, types, executor
 from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
 
-# 1) Завантажуємо .env (якщо є)
+# Завантажуємо змінні середовища з .env
 load_dotenv()
-
-# 2) Змінні середовища
 TOKEN             = os.getenv("TELEGRAM_TOKEN")
-SMM_CHAT_IDS      = [int(x) for x in os.getenv("SMM_CHAT_IDS", "").split(",") if x.strip()]
-STORAGE_CHAT_ID   = int(os.getenv("STORAGE_CHAT_ID",    "0"))
-PINNED_MESSAGE_ID = int(os.getenv("PINNED_MESSAGE_ID",  "0"))
+SMM_CHAT_IDS      = [int(x) for x in os.getenv("SMM_CHAT_IDS","").split(",") if x.strip()]
+STORAGE_CHAT_ID   = int(os.getenv("STORAGE_CHAT_ID","0"))
+PINNED_MESSAGE_ID = int(os.getenv("PINNED_MESSAGE_ID","0"))
 
 if not all([TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID, PINNED_MESSAGE_ID]):
-    raise RuntimeError(
-        "Встановіть у середовищі: TELEGRAM_TOKEN, "
-        "SMM_CHAT_IDS, STORAGE_CHAT_ID та PINNED_MESSAGE_ID"
-    )
+    raise RuntimeError("Потрібно встановити всі змінні середовища: TELEGRAM_TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID, PINNED_MESSAGE_ID")
 
-# 3) Ініціалізація бота та диспетчера (aiogram v3.0.0b7)
 bot = Bot(token=TOKEN)
 dp  = Dispatcher(bot)
-
-# стан користувача: яка категорія обрана
 user_state: dict[int, str] = {}
 
-# 4) Функції для роботи з JSON у запіненому повідомленні
 async def load_db() -> dict:
     chat   = await bot.get_chat(STORAGE_CHAT_ID)
     pinned = chat.pinned_message
     try:
         return json.loads(pinned.text or "{}")
-    except json.JSONDecodeError:
+    except:
         return {}
 
 async def save_db(data: dict):
@@ -43,7 +35,6 @@ async def save_db(data: dict):
         text=text
     )
 
-# 5) Обробники повідомлень
 @dp.message_handler(commands=["start"])
 async def cmd_start(message: types.Message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -51,10 +42,7 @@ async def cmd_start(message: types.Message):
         "Контент з весілля, гендерпатія, освідчення",
         "Корпоративи, дні народження, конференції"
     )
-    await message.answer(
-        "Що за котик завітав? Що сьогодні назнімав?",
-        reply_markup=kb
-    )
+    await message.answer("Що за котик завітав? Що сьогодні назнімав?", reply_markup=kb)
 
 @dp.message_handler(lambda m: m.text in [
     "Контент з весілля, гендерпатія, освідчення",
@@ -77,19 +65,14 @@ async def receive_link(message: types.Message):
     })
     db[uid] = entry
     await save_db(db)
-
-    # Повідомлення користувачу
     await message.answer(f"Контент отримано! Твій лічильник чемпіона: {entry['count']}")
-
-    # Сповіщення SMM-командам
     alert = (
         f"🆕 Новий контент від {entry['name']}\n"
         f"Категорія: {user_state.get(message.from_user.id)}\n"
         f"Лінк: {message.text}"
     )
-    for chat_id in SMM_CHAT_IDS:
-        await bot.send_message(chat_id=chat_id, text=alert)
+    for cid in SMM_CHAT_IDS:
+        await bot.send_message(chat_id=cid, text=alert)
 
-# 6) Запуск бота
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
