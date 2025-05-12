@@ -2,12 +2,9 @@ import os
 import json
 import asyncio
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher
-from aiogram.types import Message, ReplyKeyboardMarkup
-from aiogram.filters import Command
-from aiogram.filters.text import Text
+from aiogram import Bot, Dispatcher, types
 
-# --- 1) Завантажуємо .env ---
+# 1) Завантажуємо .env
 load_dotenv()
 TOKEN           = os.getenv("TELEGRAM_TOKEN")
 SMM_CHAT_IDS    = [int(x) for x in os.getenv("SMM_CHAT_IDS", "").split(",") if x]
@@ -17,11 +14,11 @@ DB_FILE         = "data.json"
 if not all([TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID]):
     raise RuntimeError("Вкажіть у .env: TELEGRAM_TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID")
 
-# --- 2) Ініціалізація бота і диспетчера ---
+# 2) Ініціалізація бота і диспетчера
 bot = Bot(token=TOKEN)
 dp  = Dispatcher()
 
-# --- 3) Функції для data.json ---
+# 3) Локальна БД
 def load_db() -> dict:
     if os.path.exists(DB_FILE):
         return json.load(open(DB_FILE, encoding="utf-8"))
@@ -31,16 +28,16 @@ def save_db(db: dict):
     json.dump(db, open(DB_FILE, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
 
-# --- 4) Хендлери ---
-async def cmd_start(message: Message):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+# 4) Хендлери
+async def cmd_start(message: types.Message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("Весільний контент", "Корпоративний контент")
     await message.answer(
         "Що за котик завітав? Що сьогодні назнімав?",
         reply_markup=kb
     )
 
-async def cmd_stats(message: Message):
+async def cmd_stats(message: types.Message):
     db = load_db()
     uid = str(message.from_user.id)
     if uid in db:
@@ -56,11 +53,11 @@ async def cmd_stats(message: Message):
         text = "Ви ще нічого не надсилали."
     await message.answer(text)
 
-async def choose_category(message: Message):
+async def choose_category(message: types.Message):
     dp.storage.data[message.from_user.id] = {"cat": message.text}
     await message.answer("Надішліть, будь ласка, лінк, що починається з http…")
 
-async def receive_link(message: Message):
+async def receive_link(message: types.Message):
     db = load_db()
     uid = str(message.from_user.id)
     entry = db.get(uid, {"name": message.from_user.full_name, "count": 0})
@@ -73,25 +70,19 @@ async def receive_link(message: Message):
         chat_id=STORAGE_CHAT_ID,
         text=f"#{entry['count']} | {entry['name']} | {message.text}"
     )
-    # 2) Відповідь користувачу
+    # 2) Підтвердження користувачу
     await message.answer("Дуже крутий контент, я тебе обожнюю! Чекаю наступного.")
     # 3) Сповіщення SMM
     note = f"🆕 Новий контент від {entry['name']} (#{entry['count']})\n{message.text}"
     for cid in SMM_CHAT_IDS:
         await bot.send_message(cid, note)
 
-# --- 5) Реєстрація хендлерів ---
-dp.message.register(cmd_start, Command(commands=["start"]))
-dp.message.register(cmd_stats, Command(commands=["stats"]))
-dp.message.register(
-    choose_category,
-    Text(equals=["Весільний контент","Корпоративний контент"])
-)
-dp.message.register(
-    receive_link,
-    Text(startswith="http")
-)
+# 5) Реєструємо хендлери через лямбда-функції
+dp.message.register(cmd_start,       lambda m: m.text == "/start")
+dp.message.register(cmd_stats,       lambda m: m.text == "/stats")
+dp.message.register(choose_category, lambda m: m.text in ["Весільний контент", "Корпоративний контент"])
+dp.message.register(receive_link,    lambda m: m.text and m.text.startswith("http"))
 
-# --- 6) Старт polling ---
+# 6) Старт polling
 if __name__ == "__main__":
     asyncio.run(dp.start_polling(bot, skip_updates=True))
