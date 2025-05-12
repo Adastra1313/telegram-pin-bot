@@ -1,27 +1,34 @@
-import os, json, datetime
+import os
+import json
+import datetime
+import asyncio
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
 
+# --- Налаштування ---
 load_dotenv()
 TOKEN           = os.getenv("TELEGRAM_TOKEN")
 SMM_CHAT_IDS    = [int(x) for x in os.getenv("SMM_CHAT_IDS","").split(",") if x]
 STORAGE_CHAT_ID = int(os.getenv("STORAGE_CHAT_ID","0"))
 DB_FILE         = "data.json"
 
-bot = Bot(token=TOKEN)
-dp  = Dispatcher(bot)
-user_state = {}
+if not all([TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID]):
+    raise RuntimeError("Вкажіть у .env: TELEGRAM_TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID")
 
-def load_db():
+bot = Bot(token=TOKEN)
+dp  = Dispatcher()
+
+# --- Робота з локальною БД ---
+def load_db() -> dict:
     if os.path.exists(DB_FILE):
         return json.load(open(DB_FILE, encoding="utf-8"))
     return {}
 
-def save_db(db):
+def save_db(db: dict):
     json.dump(db, open(DB_FILE,"w",encoding="utf-8"),
               ensure_ascii=False, indent=2)
 
+# --- Обробники ---
 @dp.message_handler(commands=["start"])
 async def cmd_start(m: types.Message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -44,29 +51,31 @@ async def cmd_stats(m: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["Весільний контент","Корпоративний контент"])
 async def choose(m: types.Message):
-    user_state[m.from_user.id] = m.text
-    await m.answer("Надішліть, будь ласка, лінк (http…)")
+    # Запам’ятовуємо категорію
+    dp.storage.data[m.from_user.id] = {"cat": m.text}
+    await m.answer("Надішліть лінк (http…)")
 
 @dp.message_handler(lambda m: m.text and m.text.startswith("http"))
 async def receive(m: types.Message):
     db = load_db()
-    uid = str(m.from_user.id)
-    e = db.get(uid, {"name":m.from_user.full_name,"count":0})
-    e["count"] += 1
-    db[uid] = e
+    uid   = str(m.from_user.id)
+    entry = db.get(uid, {"name":m.from_user.full_name, "count":0})
+    entry["count"] += 1
+    db[uid] = entry
     save_db(db)
 
-    # публікація в Storage-канал
+    # Публікація в Storage-канал
     await bot.send_message(
-        chat_id=STORAGE_CHAT_ID,
-        text=f"#{e['count']} | {e['name']} | {m.text}"
+        STORAGE_CHAT_ID,
+        f"#{entry['count']} | {entry['name']} | {m.text}"
     )
-    # відповідь користувачу
+    # Відповідь
     await m.answer("Дуже крутий контент, я тебе обожнюю! Чекаю наступного.")
-    # сповіщення SMM
-    note = f"🆕 {e['name']} (#{e['count']})\n{m.text}"
+    # Сповіщення SMM
+    note = f"🆕 {entry['name']} (#{entry['count']})\n{m.text}"
     for cid in SMM_CHAT_IDS:
         await bot.send_message(cid, note)
 
-if __name__=="__main__":
-    executor.start_polling(dp, skip_updates=True)
+# --- Стартуємо polling через asyncio ---
+if __name__ == "__main__":
+    asyncio.run(dp.start_polling(bot, skip_updates=True))
