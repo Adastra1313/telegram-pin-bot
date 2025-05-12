@@ -1,4 +1,4 @@
-aiogram==3.0.0b7
-aiohttp==3.8.5
-python-dotenv
-flask
+Collecting aiogram==3.20.0
+Collecting aiohttp>=3.9,<3.12
+…
+INFO  Starting polling…
