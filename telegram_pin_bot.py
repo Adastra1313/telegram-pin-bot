@@ -1,10 +1,13 @@
 import os
 import json
 import datetime
-import asyncio
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, executor
+from dotenv import load_dotenv
 
-# Завантажуємо змінні середовища
+# 1) Завантажуємо .env (якщо є)
+load_dotenv()
+
+# 2) Змінні середовища
 TOKEN             = os.getenv("TELEGRAM_TOKEN")
 SMM_CHAT_IDS      = [int(x) for x in os.getenv("SMM_CHAT_IDS", "").split(",") if x.strip()]
 STORAGE_CHAT_ID   = int(os.getenv("STORAGE_CHAT_ID",    "0"))
@@ -12,16 +15,18 @@ PINNED_MESSAGE_ID = int(os.getenv("PINNED_MESSAGE_ID",  "0"))
 
 if not all([TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID, PINNED_MESSAGE_ID]):
     raise RuntimeError(
-        "Встановіть всі змінні середовища: "
-        "TELEGRAM_TOKEN, SMM_CHAT_IDS, STORAGE_CHAT_ID, PINNED_MESSAGE_ID"
+        "Встановіть у середовищі: TELEGRAM_TOKEN, "
+        "SMM_CHAT_IDS, STORAGE_CHAT_ID та PINNED_MESSAGE_ID"
     )
 
-# Ініціалізація бота та диспетчера
+# 3) Ініціалізація бота та диспетчера (aiogram v3.0.0b7)
 bot = Bot(token=TOKEN)
-dp  = Dispatcher()
+dp  = Dispatcher(bot)
 
+# стан користувача: яка категорія обрана
 user_state: dict[int, str] = {}
 
+# 4) Функції для роботи з JSON у запіненому повідомленні
 async def load_db() -> dict:
     chat   = await bot.get_chat(STORAGE_CHAT_ID)
     pinned = chat.pinned_message
@@ -38,6 +43,7 @@ async def save_db(data: dict):
         text=text
     )
 
+# 5) Обробники повідомлень
 @dp.message_handler(commands=["start"])
 async def cmd_start(message: types.Message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -54,7 +60,7 @@ async def cmd_start(message: types.Message):
     "Контент з весілля, гендерпатія, освідчення",
     "Корпоративи, дні народження, конференції"
 ])
-async def choose_cat(message: types.Message):
+async def choose_category(message: types.Message):
     user_state[message.from_user.id] = message.text
     await message.answer("Надішліть, будь ласка, посилання на сторіс.")
 
@@ -72,14 +78,18 @@ async def receive_link(message: types.Message):
     db[uid] = entry
     await save_db(db)
 
+    # Повідомлення користувачу
     await message.answer(f"Контент отримано! Твій лічильник чемпіона: {entry['count']}")
+
+    # Сповіщення SMM-командам
     alert = (
         f"🆕 Новий контент від {entry['name']}\n"
         f"Категорія: {user_state.get(message.from_user.id)}\n"
         f"Лінк: {message.text}"
     )
-    for cid in SMM_CHAT_IDS:
-        await bot.send_message(chat_id=cid, text=alert)
+    for chat_id in SMM_CHAT_IDS:
+        await bot.send_message(chat_id=chat_id, text=alert)
 
+# 6) Запуск бота
 if __name__ == "__main__":
-    asyncio.run(dp.start_polling(bot, skip_updates=True))
+    executor.start_polling(dp, skip_updates=True)
